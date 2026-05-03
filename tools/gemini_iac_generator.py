@@ -51,12 +51,10 @@ def call_gemini(prompt):
 
 def extract_code_block(text):
     """Extract code from markdown code blocks if present."""
-    # Try to find ```hcl or ```terraform blocks
     pattern = r"```(?:hcl|terraform)?\s*\n([\s\S]*?)```"
     matches = re.findall(pattern, text)
     if matches:
         return "\n\n".join(matches)
-    # If no code blocks, return the full text
     return text.strip()
 
 
@@ -74,6 +72,8 @@ def main():
     except Exception:
         tags = {"owner": "unknown"}
 
+    replication = sku.split("_")[-1] if "_" in sku else "LRS"
+
     print(f"Parsed issue fields:")
     print(f"  Environment: {environment}")
     print(f"  Location: {location}")
@@ -87,9 +87,10 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # ============================================
-    # GEMINI AI: Generate main.tf
+    # GEMINI AI: Generate main.tf (SECURITY HARDENED)
     # ============================================
-    main_tf_prompt = f"""You are a Terraform expert. Generate production-ready Terraform code for Azure.
+    main_tf_prompt = f"""You are a senior Terraform engineer specializing in Azure cloud security.
+Generate production-ready, security-hardened Terraform code.
 
 Requirements:
 - Create a Resource Group named "{rg_name}" in "{location}"
@@ -97,67 +98,98 @@ Requirements:
 - SKU: {sku}
 - Tags: {json.dumps(tags)}
 
-Rules:
-- Use azurerm provider >= 3.0.0
+MANDATORY SECURITY RULES (DO NOT SKIP ANY):
+- MUST include: min_tls_version = "TLS1_2"
+- MUST include: enable_https_traffic_only = true
+- MUST include: public_network_access_enabled = false
+- MUST include: account_kind = "StorageV2"
+- MUST include: blob_properties block with versioning_enabled = true
+- MUST include: infrastructure_encryption_enabled = true
+
+TERRAFORM RULES:
+- Use azurerm provider version "~> 3.80"
 - Include terraform block with required_version >= 1.5.0
 - Include provider "azurerm" block with features {{}}
-- Use variables for all configurable values (resource_group_name, location, storage_account_name, replication_type, tags)
-- Reference variables using var.variable_name
+- Use variables for all configurable values:
+  - var.resource_group_name
+  - var.location
+  - var.storage_account_name
+  - var.replication_type
+  - var.tags
+- Apply tags to ALL resources
+- Reference resources properly (azurerm_resource_group.rg.name, etc.)
+
+OUTPUT RULES:
 - Output ONLY valid Terraform HCL code
 - Do NOT include any explanations, comments, or markdown formatting
-- Do NOT wrap in code blocks"""
+- Do NOT wrap in code blocks
+- Do NOT add any text before or after the code"""
 
-    print("\nCalling Gemini AI for main.tf...")
+    print("\nCalling Gemini AI for main.tf (security-hardened)...")
     main_tf_raw = call_gemini(main_tf_prompt)
     main_tf = extract_code_block(main_tf_raw)
     print("main.tf generated successfully!")
 
     # ============================================
-    # GEMINI AI: Generate variables.tf
+    # GEMINI AI: Generate variables.tf (WITH VALIDATION)
     # ============================================
-    variables_prompt = f"""You are a Terraform expert. Generate a variables.tf file for Azure infrastructure.
+    variables_prompt = f"""You are a senior Terraform engineer. Generate a variables.tf file with input validation.
 
-The variables must match this main.tf usage:
+The variables must match this usage:
 - var.resource_group_name (default: "{rg_name}")
 - var.location (default: "{location}")
 - var.storage_account_name (default: "{resource_name}")
-- var.replication_type (default: "{sku.split('_')[-1] if '_' in sku else 'LRS'}")
+- var.replication_type (default: "{replication}")
 - var.tags (type: map(string), default: {json.dumps(tags)})
 
-Rules:
+MANDATORY RULES:
 - Include description for each variable
 - Include type for each variable
-- Include default values
+- Include default values for each variable
+- Add validation block for resource_group_name: must start with "rg-"
+- Add validation block for storage_account_name: must be 3-24 lowercase letters and digits only
+- Add validation block for location: must be one of ["eastus", "eastus2", "westus", "westus2", "centralus", "westeurope", "northeurope"]
+- Add validation block for replication_type: must be one of ["LRS", "GRS", "ZRS", "RAGRS"]
+
+OUTPUT RULES:
 - Output ONLY valid Terraform HCL code
 - Do NOT include any explanations or markdown formatting
-- Do NOT wrap in code blocks"""
+- Do NOT wrap in code blocks
+- Do NOT add any text before or after the code"""
 
-    print("Calling Gemini AI for variables.tf...")
+    print("Calling Gemini AI for variables.tf (with validation)...")
     variables_tf_raw = call_gemini(variables_prompt)
     variables_tf = extract_code_block(variables_tf_raw)
     print("variables.tf generated successfully!")
 
     # ============================================
-    # GEMINI AI: Generate outputs.tf
+    # GEMINI AI: Generate outputs.tf (WITH SENSITIVE)
     # ============================================
-    outputs_prompt = """You are a Terraform expert. Generate an outputs.tf file for Azure infrastructure.
+    outputs_prompt = """You are a senior Terraform engineer. Generate an outputs.tf file for Azure infrastructure.
 
 The resources are:
 - azurerm_resource_group.rg
 - azurerm_storage_account.sa
 
 Generate outputs for:
-- resource_group_id
-- storage_account_id
-- storage_account_primary_blob_endpoint
+- resource_group_id (description: "ID of the resource group")
+- resource_group_name (description: "Name of the resource group")
+- storage_account_id (description: "ID of the storage account")
+- storage_account_name (description: "Name of the storage account")
+- storage_account_primary_blob_endpoint (description: "Primary blob endpoint")
+- storage_account_primary_connection_string (description: "Primary connection string", MUST mark as sensitive = true)
 
-Rules:
+MANDATORY RULES:
 - Include description for each output
+- Mark connection string output as sensitive = true
+
+OUTPUT RULES:
 - Output ONLY valid Terraform HCL code
 - Do NOT include any explanations or markdown formatting
-- Do NOT wrap in code blocks"""
+- Do NOT wrap in code blocks
+- Do NOT add any text before or after the code"""
 
-    print("Calling Gemini AI for outputs.tf...")
+    print("Calling Gemini AI for outputs.tf (with sensitive outputs)...")
     outputs_tf_raw = call_gemini(outputs_prompt)
     outputs_tf = extract_code_block(outputs_tf_raw)
     print("outputs.tf generated successfully!")
@@ -172,21 +204,18 @@ Rules:
 - **Title:** {ISSUE_TITLE}
 - **Environment:** {environment}
 - **Region:** {location}
-- **Generated by:** Google Gemini AI
+- **Generated by:** Google Gemini AI (Security-Hardened)
 
-> This code was automatically generated from a GitHub Issue using AI.
-> Please review carefully before merging.
-"""
+## Security Features Included
+- TLS 1.2 enforced
+- HTTPS only traffic
+- Public network access disabled
+- Infrastructure encryption enabled
+- Blob versioning enabled
+- StorageV2 account kind
 
-    # Write all files
-    (out_dir / "main.tf").write_text(main_tf)
-    (out_dir / "variables.tf").write_text(variables_tf)
-    (out_dir / "outputs.tf").write_text(outputs_tf)
-    (out_dir / "README.md").write_text(readme)
-
-    print(f"\nAll files generated in: {out_dir}")
-    print("Files: main.tf, variables.tf, outputs.tf, README.md")
-
-
-if __name__ == "__main__":
-    main()
+## Usage
+```bash
+terraform init
+terraform plan
+terraform apply
